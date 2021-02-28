@@ -1,0 +1,39 @@
+[user]
+	name = Sudqi Jawabreh
+	email = s.jawabreh@foothillsolutions.com
+[alias]
+	logl = log --oneline
+	st = status
+	cma = commit --all -m
+	lg = log --pretty='%Cred%h%Creset | %C(yellow)%d%Creset %s %Cgreen(%cr)%Creset %C(cyan)[%an]%Creset'
+	dw = diff --word-diff --unified=5
+	so = show --pretty='parent %Cred%p%Creset commit %Cred%h%Creset%C(yellow)%d%Creset%n%n%w(72,2,2)%s%n%n%w(72,0,0)%C(cyan)%an%Creset %Cgreen%ar%Creset'
+	co = checkout
+	ls = ls-files
+[filter "lfs"]
+	required = true
+	clean = git-lfs clean -- %f
+	smudge = git-lfs smudge -- %f
+	process = git-lfs filter-process
+[core]
+	editor = vim.bat
+	pager = less -RFX
+[merge]
+	conflictstyle = diff3
+	
+	
+#git co --
+
+#Show all commits in the current branch yet to be merged to master
+#git cherry -v master
+#
+#List only the root and merge commits.
+#git log --first-parent
+#
+#
+#Add everything, but whitespace changes
+#git diff --ignore-all-space | git apply --cached
+[rebase]
+	autosquash = true
+[rerere]
+	enabled = true
