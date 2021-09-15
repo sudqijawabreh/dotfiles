@@ -10,13 +10,14 @@
 	so = show --pretty='parent %Cred%p%Creset commit %Cred%h%Creset%C(yellow)%d%Creset%n%n%w(72,2,2)%s%n%n%w(72,0,0)%C(cyan)%an%Creset %Cgreen%ar%Creset'
 	co = checkout
 	ls = ls-files
+	amend = commit --amend
+	amendno = commit --amend --no-edit
 [filter "lfs"]
 	required = true
 	clean = git-lfs clean -- %f
 	smudge = git-lfs smudge -- %f
 	process = git-lfs filter-process
 [core]
-	editor = vim.bat
 	pager = less -RFX
 [merge]
 	conflictstyle = diff3
@@ -36,4 +37,4 @@
 [rebase]
 	autosquash = true
 [rerere]
-	enabled = true
+	#enabled = true
