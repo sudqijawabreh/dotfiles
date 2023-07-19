@@ -397,3 +397,31 @@ Set-PSReadLineKeyHandler -Key F7 `
     }
 }
 
+
+function Show-Calendar {
+    param(
+        [Parameter(Mandatory=$false)]
+        [DateTime] $date = (Get-Date)
+    )
+
+    $daysInMonth = [DateTime]::DaysInMonth($date.Year, $date.Month)
+
+    $firstDayOfMonth = Get-Date -Year $date.Year -Month $date.Month -Day 1
+    $lastDayOfMonth = Get-Date -Year $date.Year -Month $date.Month -Day $daysInMonth
+
+    Write-Host $firstDayOfMonth.ToString('MMMM yyyy')
+    Write-Host 'Su Mo Tu We Th Fr Sa'
+
+    Write-Host ('   ' * $firstDayOfMonth.DayOfWeek.Value__) -NoNewline
+
+    for ($day = 1; $day -le $daysInMonth; $day++) {
+        $date = Get-Date -Year $firstDayOfMonth.Year -Month $firstDayOfMonth.Month -Day $day
+        Write-Host $day.ToString().PadLeft(2) -NoNewline
+        if ($date.DayOfWeek -eq [DayOfWeek]::Saturday) {
+            Write-Host
+        } else {
+            Write-Host -NoNewline ' '
+        }
+    }
+    Write-Host
+}
