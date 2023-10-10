@@ -12,10 +12,13 @@ function openNvimWithTerminal{
 }
 
 function Fzf-History {
-    $selectedCommand = Get-History | ForEach-Object { $_.CommandLine } | fzf --tac
-    if (-not [string]::IsNullOrEmpty($selectedCommand)) {
-        Invoke-Expression $selectedCommand
+    $selectedCommand = Get-Content (Get-PSReadlineOption).HistorySavePath | fzf  --tac
+    if ($selectedCommand) {
+        Clear-Host
+        [Microsoft.PowerShell.PSConsoleReadLine]::InvokePrompt()
+        [Microsoft.PowerShell.PSConsoleReadLine]::Insert($selectedCommand)
     }
+    
 }
 
 function OpenInVim {
@@ -438,5 +441,10 @@ function Show-Calendar {
     Write-Host
 }
 
-Set-Alias -Name fh -Value Fzf-History
+Set-PSReadlineKeyHandler -Chord Ctrl+/ -ScriptBlock {
+    param($key, $arg)
+    Fzf-History
+}
+
+#Set-Alias -Name fh -Value Fzf-History
 Set-Alias -Name o -Value OpenInVim
