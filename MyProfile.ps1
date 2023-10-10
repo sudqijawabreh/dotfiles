@@ -11,6 +11,18 @@ function openNvimWithTerminal{
     nvim +"terminal powershell"
 }
 
+function Fzf-History {
+    $selectedCommand = Get-History | ForEach-Object { $_.CommandLine } | fzf --tac
+    if (-not [string]::IsNullOrEmpty($selectedCommand)) {
+        Invoke-Expression $selectedCommand
+    }
+}
+
+function OpenInVim {
+        Invoke-Expression "nvim $(fzf)"
+}
+
+
 # set global because alias default alias is for script scope
 New-Alias -Name nvimt -Value openNvimWithTerminal
 
@@ -425,3 +437,6 @@ function Show-Calendar {
     }
     Write-Host
 }
+
+Set-Alias -Name fh -Value Fzf-History
+Set-Alias -Name o -Value OpenInVim
