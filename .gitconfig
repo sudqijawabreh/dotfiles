@@ -1,6 +1,7 @@
+
 [user]
 	name = Sudqi Jawabreh
-	email = s.jawabreh@foothillsolutions.com
+	email = sudqiomar@gmail.com
 [alias]
 	logl = log --oneline
 	st = status
@@ -38,3 +39,6 @@
 	autosquash = true
 [rerere]
 	#enabled = true
+# This should be down here to override previous values
+[includeIf "gitdir:/home/sudqi/r365/"]
+    path =~/.r365-gitconfig
