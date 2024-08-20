@@ -18,8 +18,9 @@ nmap <C-i> <Action>(Forward)
 nmap <leader>z <Action>(ToggleDistractionFreeMode)
 nmap <C-v> "+P
 vnoremap <C-c> "+y
-inoremap <C-v> <Esc>"+Pa
+inoremap <C-v> <C-r>+
 cnoremap <C-v> <C-r>+
+vnoremap <C-v> "+p
 nmap <leader>h :noh<cr>
 nmap <leader>gb <Action>(Annotate)
 nmap <leader>r <Action>(RenameElement)
@@ -35,7 +36,7 @@ nmap = <Action>(ReformatCode)
 nmap <leader>b <Action>(ToggleLineBreakpoint)
 nmap <leader>gl <Action>(Vcs.ShowTabbedFileHistory)
 nmap <leader>p "0p
-vmap <leader>p "0p
+nmap <leader>p "0p
 
 
 
