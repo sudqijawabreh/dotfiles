@@ -1,0 +1,37 @@
+#!/bin/bash
+
+# Get a list of staged .cs or .txt files (you can modify this to include other extensions)
+#can filter by type using | grep -E "\.cs$|\.txt$"
+STAGED_FILES=$(git diff --cached --name-only --diff-filter=ACM)
+
+# Loop through each staged file
+for FILE in $STAGED_FILES
+do
+  # Check if the file contains start pragma
+  if grep -q "#start_exclude_commit" "$FILE"; then
+
+    # Create a patch that removes the lines between pragma markers
+    awk '{
+      if ($0 ~ /#start_exclude_commit/) flag=1;
+      if (flag && $0 ~ /#end_exclude_commit/) {flag=0; next}
+      if (!flag) print $0
+    }' "$FILE" > "$FILE.patched"
+
+    mv "$FILE" "$FILE.tmp"
+    
+    git rm --cached "$FILE" > /dev/null
+    mv "$FILE.patched" "$FILE"
+    git add "$FILE"
+    mv "$FILE.tmp" "$FILE" 
+
+    echo "'$FILE' has been processed and the excluded lines are unstaged."
+  fi
+done
+
+
+  if [ -z "$(git diff --cached --name-only)" ]; then
+    echo "No changes staged for commit. Aborting."
+    exit 1
+  fi
+# If no issues were found, allow the commit
+exit 0
