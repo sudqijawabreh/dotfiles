@@ -37,6 +37,7 @@ nmap <leader>b <Action>(ToggleLineBreakpoint)
 nmap <leader>gl <Action>(Vcs.ShowTabbedFileHistory)
 nmap <leader>p "0p
 nmap <leader>p "0p
+vmap <leader>gi d$i//#start_exclude_commit<esc>p']o<esc>0Di//#end_exclude_commit<esc>
 
 
 
