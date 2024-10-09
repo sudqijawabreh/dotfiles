@@ -20,7 +20,8 @@
 	process = git-lfs filter-process
 [core]
 	pager = less -RFX
-	hooksPath = ~/dotfiles/.git-templates/hooks
+    ; TODO: look into that more
+	; hooksPath = ~/dotfiles/.git-templates/hooks
 [merge]
 	conflictstyle = diff3
 	
