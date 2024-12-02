@@ -9,8 +9,12 @@ windows=$(xprop -root _NET_CLIENT_LIST | awk -F'#' '{print $2}' | tr ',' '\n' | 
     name=$(xprop -id "$wid" WM_CLASS | awk -F'"' '{print $4}')
     
     # Use the window name if the title is empty
-    if [ -z "$title" ]; then
-        echo "$wid - $name"
+    if [[ -z "$title" || "$title" != *-* ]]; then
+        if [[ -z "$title" ]]; then
+            echo "$wid - $name"
+        else
+            echo "$wid - $title - $name"
+        fi
     else
         echo "$wid - $title"
     fi
