@@ -28,6 +28,8 @@ nmap <leader>; <Action>(SelectInProjectView)
 nmap <leader>f <Action>(GotoFile)
 nmap <leader>cr <Action>(RecentFiles)
 nmap <C-w>O <Action>(CloseAllEditorsButActive)
+" hide all windows if you press again it will restore them
+nmap <C-w>m <Action>(HideAllWindows)
 nmap ]e <Action>(GotoNextError)
 nmap [e <Action>(GotoPreviousError)
 vmap = <Action>(ReformatCode)
