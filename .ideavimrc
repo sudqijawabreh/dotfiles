@@ -3,7 +3,6 @@
 " You can find a list of commands here: https://jb.gg/h38q75
 " Find more examples here: https://jb.gg/share-ideavimrc
 let mapleader = " "
-
 "" -- Suggested options --
 " Show a few lines of context around the cursor. Note that this makes the
 " text scroll if you mouse-click near the start or end of the window.
@@ -29,7 +28,7 @@ nmap <leader>f <Action>(GotoFile)
 nmap <leader>cr <Action>(RecentFiles)
 nmap <C-w>O <Action>(CloseAllEditorsButActive)
 " hide all windows if you press again it will restore them
-nmap <C-w>m <Action>(HideAllWindows)
+nmap <C-w>o <Action>(HideAllWindows)
 nmap ]e <Action>(GotoNextError)
 nmap [e <Action>(GotoPreviousError)
 vmap = <Action>(ReformatCode)
