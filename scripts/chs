@@ -1,0 +1,210 @@
+#!/usr/bin/env bash
+
+set -Eeuo pipefail
+
+SESSIONS_ROOT="${CODEX_SESSIONS_ROOT:-$HOME/.codex/sessions}"
+HISTORY_FILE="${CODEX_HISTORY_FILE:-$HOME/.codex/history.jsonl}"
+HISTORY_SEARCH="${CODEX_HISTORY_SEARCH_SCRIPT:-$HOME/dotfiles/scripts/codex-history-search}"
+LIMIT="${CHS_LIMIT:-300}"
+PRINT_SESSION=0
+USE_HISTORY_QUERY=0
+
+usage() {
+  cat <<'USAGE'
+Codex History Session picker.
+
+Usage:
+  chs [options] [query...]
+
+Behavior:
+  - `chs` (no query): show recent sessions and open selected one.
+  - `chs <query>`: search matching sessions (title/cwd/content) then open selected one.
+  - `chs --history-query`: pick query from history first, then pick session.
+
+Options:
+      --print-session   Print selected session id and exit
+      --history-query   Pick query from prompt history first
+  -h, --help            Show help
+
+Examples:
+  chs
+  chs jira ticket
+  chs --history-query
+  chs --print-session "state case sensitivity"
+USAGE
+}
+
+require_cmd() {
+  if ! command -v "$1" >/dev/null 2>&1; then
+    echo "Missing required command: $1" >&2
+    exit 1
+  fi
+}
+
+session_id_from_path() {
+  local path="$1"
+  local base
+  base="$(basename "$path")"
+  printf '%s\n' "$base" | grep -oE '[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}' | head -n 1 || true
+}
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --print-session)
+      PRINT_SESSION=1
+      shift
+      ;;
+    --history-query)
+      USE_HISTORY_QUERY=1
+      shift
+      ;;
+    -h|--help)
+      usage
+      exit 0
+      ;;
+    --)
+      shift
+      break
+      ;;
+    -*)
+      echo "Unknown option: $1" >&2
+      usage
+      exit 1
+      ;;
+    *)
+      break
+      ;;
+  esac
+done
+
+require_cmd jq
+require_cmd fzf
+require_cmd codex
+require_cmd rg
+
+if [[ ! -d "$SESSIONS_ROOT" ]]; then
+  echo "Codex sessions directory not found: $SESSIONS_ROOT" >&2
+  exit 1
+fi
+
+if ! [[ "$LIMIT" =~ ^[0-9]+$ ]] || [[ "$LIMIT" -le 0 ]]; then
+  echo "CHS_LIMIT must be a positive integer" >&2
+  exit 1
+fi
+
+QUERY=""
+if [[ $# -gt 0 ]]; then
+  QUERY="$*"
+elif [[ "$USE_HISTORY_QUERY" -eq 1 ]]; then
+  if [[ ! -x "$HISTORY_SEARCH" ]]; then
+    echo "History search script not found/executable: $HISTORY_SEARCH" >&2
+    exit 1
+  fi
+  QUERY="$($HISTORY_SEARCH --fzf --pick-only)" || exit $?
+fi
+
+tmpdir="$(mktemp -d)"
+trap 'rm -rf "$tmpdir"' EXIT
+
+titles_file="$tmpdir/titles.tsv"
+sessions_file="$tmpdir/sessions.tsv"
+filtered_file="$tmpdir/filtered.tsv"
+
+if [[ -f "$HISTORY_FILE" ]]; then
+  jq -r '[.session_id // "", (.text // "" | gsub("[\\r\\n\\t]+"; " "))] | @tsv' "$HISTORY_FILE" 2>/dev/null \
+    | awk -F $'\t' 'NF >= 2 && $1 != "" && !seen[$1]++ { print $1 "\t" $2 }' > "$titles_file" || true
+else
+  : > "$titles_file"
+fi
+
+declare -A TITLE_BY_SESSION=()
+while IFS=$'\t' read -r sid title; do
+  [[ -n "$sid" ]] && TITLE_BY_SESSION["$sid"]="$title"
+done < "$titles_file"
+
+: > "$sessions_file"
+while IFS= read -r file; do
+  sid="$(session_id_from_path "$file")"
+  [[ -z "$sid" ]] && continue
+
+  cwd="$(jq -r 'select(.type=="session_meta") | .payload.cwd // empty' "$file" 2>/dev/null | head -n 1)"
+  last_ts="$(jq -r '.timestamp // empty' "$file" 2>/dev/null | tail -n 1)"
+  title="${TITLE_BY_SESSION[$sid]:-}"
+
+  if [[ -z "$title" ]]; then
+    title="$(jq -r '
+      select(.type=="response_item" and .payload.type=="message" and .payload.role=="user") as $m
+      | $m.payload.content[]?
+      | (.text // .input_text // .output_text // empty)
+      | select((.|type)=="string" and length > 0)
+      | gsub("[\\r\\n\\t]+"; " ")
+    ' "$file" 2>/dev/null | head -n 1)"
+  fi
+
+  printf '%s\t%s\t%s\t%s\t%s\n' "$last_ts" "$sid" "$cwd" "$title" "$file" >> "$sessions_file"
+done < <(find "$SESSIONS_ROOT" -type f -name '*.jsonl' | sort)
+
+sort -r "$sessions_file" -o "$sessions_file"
+
+if [[ -z "$QUERY" ]]; then
+  head -n "$LIMIT" "$sessions_file" > "$filtered_file"
+else
+  : > "$filtered_file"
+  while IFS=$'\t' read -r ts sid cwd title file; do
+    [[ -z "$sid" || -z "$file" ]] && continue
+
+    if printf '%s\n' "$sid $cwd $title" | grep -Fqi -- "$QUERY"; then
+      printf '%s\t%s\t%s\t%s\t%s\n' "$ts" "$sid" "$cwd" "$title" "$file" >> "$filtered_file"
+      continue
+    fi
+
+    if rg -qi -- "$QUERY" "$file"; then
+      printf '%s\t%s\t%s\t%s\t%s\n' "$ts" "$sid" "$cwd" "$title" "$file" >> "$filtered_file"
+      continue
+    fi
+  done < "$sessions_file"
+
+  head -n "$LIMIT" "$filtered_file" > "$tmpdir/filtered_limited.tsv"
+  mv "$tmpdir/filtered_limited.tsv" "$filtered_file"
+fi
+
+if [[ ! -s "$filtered_file" ]]; then
+  if [[ -n "$QUERY" ]]; then
+    echo "No matching Codex sessions found for query: $QUERY" >&2
+  else
+    echo "No Codex sessions found." >&2
+  fi
+  exit 0
+fi
+
+selected="$({
+  cat "$filtered_file" | fzf \
+    --prompt='Codex session> ' \
+    --height=75% \
+    --layout=reverse \
+    --border \
+    --delimiter=$'\t' \
+    --with-nth=1,4,3 \
+    --header=$'Enter: resume session | Ctrl-C: cancel' \
+    --preview 'echo "Session ID: {2}"; echo; echo "Title: {4}"; echo; echo "CWD: {3}"; echo; echo "Last activity: {1}"' \
+    --preview-window=down:8:wrap \
+    --query "$QUERY"
+})"
+
+if [[ -z "$selected" ]]; then
+  exit 130
+fi
+
+session_id="$(printf '%s\n' "$selected" | head -n 1 | cut -f2)"
+session_cwd="$(printf '%s\n' "$selected" | head -n 1 | cut -f3)"
+
+if [[ "$PRINT_SESSION" -eq 1 ]]; then
+  printf '%s\n' "$session_id"
+  exit 0
+fi
+
+if [[ -n "$session_cwd" && -d "$session_cwd" ]]; then
+  exec codex resume --all -C "$session_cwd" "$session_id"
+fi
+
+exec codex resume --all "$session_id"
