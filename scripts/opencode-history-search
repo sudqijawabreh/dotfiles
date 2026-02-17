@@ -1,0 +1,339 @@
+#!/usr/bin/env bash
+
+set -Eeuo pipefail
+
+DB_PATH="${OPENCODE_DB_PATH:-$HOME/.local/share/opencode/opencode.db}"
+PROMPT_HISTORY_PATH="${OPENCODE_PROMPT_HISTORY_PATH:-$HOME/.local/state/opencode/prompt-history.jsonl}"
+LIMIT=25
+ROLE="any"
+PART_TYPE="all"
+SESSION_FILTER=""
+TITLES_ONLY=0
+FZF_MODE=0
+PICK_ONLY=0
+
+usage() {
+  cat <<'USAGE'
+Search OpenCode session history.
+
+Usage:
+  opencode-history-search [options] <query>
+  opencode-history-search --fzf [seed-query]
+
+Options:
+  -n, --limit N        Max results (default: 25)
+  -r, --role ROLE      user | assistant | any (default: any)
+  -t, --type TYPE      part type filter (text | tool | reasoning | all)
+  -s, --session ID     Filter to one session id
+      --titles-only    Search only session titles
+      --fzf            Pick query from OpenCode prompt history via fzf
+      --pick-only      With --fzf, print selected query and exit
+  -d, --db PATH        Path to opencode.db
+  -h, --help           Show help
+
+Examples:
+  opencode-history-search "jira ticket"
+  opencode-history-search -r user -n 10 "state case sensitivity"
+  opencode-history-search --titles-only "migration"
+  opencode-history-search --fzf
+  opencode-history-search --fzf "state"
+USAGE
+}
+
+require_cmd() {
+  if ! command -v "$1" >/dev/null 2>&1; then
+    echo "Missing required command: $1" >&2
+    exit 1
+  fi
+}
+
+escape_sql() {
+  local s="$1"
+  s="${s//\'/\'\'}"
+  printf '%s' "$s"
+}
+
+run_sql() {
+  local sql="$1"
+  local attempt
+  local out=""
+
+  for attempt in 1 2 3 4 5; do
+    if out="$(sqlite3 -readonly -noheader -separator $'\t' "$DB_PATH" "$sql" 2>&1)"; then
+      printf '%s\n' "$out"
+      return 0
+    fi
+
+    if [[ "$out" == *"database is locked"* || "$out" == *"database is busy"* || "$out" == *"unable to open database file"* ]]; then
+      sleep "0.$((attempt * 2))"
+      continue
+    fi
+
+    echo "$out" >&2
+    return 1
+  done
+
+  echo "$out" >&2
+  return 1
+}
+
+fallback_grep() {
+  local raw_query="$1"
+
+  echo "SQLite query failed. Falling back to grep in session metadata and prompt history." >&2
+
+  local sources=(
+    "$HOME/.local/share/opencode/storage/session"
+    "$HOME/.local/state/opencode/prompt-history.jsonl"
+  )
+
+  local existing=()
+  local src
+  for src in "${sources[@]}"; do
+    [[ -e "$src" ]] && existing+=("$src")
+  done
+
+  if [[ ${#existing[@]} -eq 0 ]]; then
+    echo "No fallback history sources found." >&2
+    return 1
+  fi
+
+  rg -n --pretty -i --max-count "$LIMIT" -- "$raw_query" "${existing[@]}"
+}
+
+pick_query_from_history() {
+  local seed_query="$1"
+
+  require_cmd fzf
+  require_cmd jq
+
+  if [[ ! -f "$PROMPT_HISTORY_PATH" ]]; then
+    echo "Prompt history not found at: $PROMPT_HISTORY_PATH" >&2
+    exit 1
+  fi
+
+  local selected
+  selected="$({
+      jq -r '.input // empty' "$PROMPT_HISTORY_PATH" \
+        | awk 'NF' \
+        | tac \
+        | awk '!seen[$0]++'
+    } | fzf \
+      --prompt='OpenCode history> ' \
+      --height=70% \
+      --layout=reverse \
+      --border \
+      --query "$seed_query" \
+      --preview 'echo {}' \
+      --preview-window=down:3:wrap
+  )"
+
+  if [[ -z "$selected" ]]; then
+    exit 130
+  fi
+
+  printf '%s\n' "$selected"
+}
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    -n|--limit)
+      LIMIT="$2"
+      shift 2
+      ;;
+    -r|--role)
+      ROLE="$2"
+      shift 2
+      ;;
+    -t|--type)
+      PART_TYPE="$2"
+      shift 2
+      ;;
+    -s|--session)
+      SESSION_FILTER="$2"
+      shift 2
+      ;;
+    --titles-only)
+      TITLES_ONLY=1
+      shift
+      ;;
+    --fzf)
+      FZF_MODE=1
+      shift
+      ;;
+    --pick-only)
+      PICK_ONLY=1
+      shift
+      ;;
+    -d|--db)
+      DB_PATH="$2"
+      shift 2
+      ;;
+    -h|--help)
+      usage
+      exit 0
+      ;;
+    --)
+      shift
+      break
+      ;;
+    -*)
+      echo "Unknown option: $1" >&2
+      usage
+      exit 1
+      ;;
+    *)
+      break
+      ;;
+  esac
+done
+
+if [[ "$FZF_MODE" -eq 1 ]]; then
+  QUERY="$(pick_query_from_history "${*:-}")"
+  if [[ "$PICK_ONLY" -eq 1 ]]; then
+    printf '%s\n' "$QUERY"
+    exit 0
+  fi
+else
+  if [[ $# -eq 0 ]]; then
+    usage
+    exit 1
+  fi
+  QUERY="$*"
+fi
+
+if ! [[ "$LIMIT" =~ ^[0-9]+$ ]] || [[ "$LIMIT" -le 0 ]]; then
+  echo "--limit must be a positive integer" >&2
+  exit 1
+fi
+
+case "$ROLE" in
+  any|user|assistant) ;;
+  *)
+    echo "--role must be one of: any, user, assistant" >&2
+    exit 1
+    ;;
+esac
+
+require_cmd sqlite3
+require_cmd rg
+
+if [[ ! -f "$DB_PATH" ]]; then
+  echo "OpenCode DB not found at: $DB_PATH" >&2
+  exit 1
+fi
+
+QUERY_ESCAPED="$(escape_sql "$QUERY")"
+
+where_clauses=()
+where_clauses+=("instr(lower(s.title || ' ' || p.data), lower('${QUERY_ESCAPED}')) > 0")
+
+if [[ "$ROLE" != "any" ]]; then
+  ROLE_ESCAPED="$(escape_sql "$ROLE")"
+  where_clauses+=("json_extract(m.data, '$.role') = '${ROLE_ESCAPED}'")
+fi
+
+if [[ "$PART_TYPE" != "all" ]]; then
+  PART_ESCAPED="$(escape_sql "$PART_TYPE")"
+  where_clauses+=("json_extract(p.data, '$.type') = '${PART_ESCAPED}'")
+fi
+
+if [[ -n "$SESSION_FILTER" ]]; then
+  SESSION_ESCAPED="$(escape_sql "$SESSION_FILTER")"
+  where_clauses+=("s.id = '${SESSION_ESCAPED}'")
+fi
+
+WHERE_SQL="$(printf '%s' "${where_clauses[0]}")"
+for clause in "${where_clauses[@]:1}"; do
+  WHERE_SQL+=" AND ${clause}"
+done
+
+if [[ "$TITLES_ONLY" -eq 1 ]]; then
+  TITLE_WHERE="instr(lower(title), lower('${QUERY_ESCAPED}')) > 0"
+
+  if [[ -n "$SESSION_FILTER" ]]; then
+    TITLE_WHERE+=" AND id = '${SESSION_ESCAPED}'"
+  fi
+
+  SQL="
+SELECT
+  datetime(time_updated / 1000, 'unixepoch', 'localtime') AS updated,
+  id,
+  title
+FROM session
+WHERE ${TITLE_WHERE}
+ORDER BY time_updated DESC
+LIMIT ${LIMIT};"
+
+  if ! output="$(run_sql "$SQL")"; then
+    fallback_grep "$QUERY"
+    exit $?
+  fi
+
+  if [[ -z "$output" ]]; then
+    echo "No title matches for: $QUERY"
+    exit 0
+  fi
+
+  printf '%s\n' "$output" | awk -F '\t' 'BEGIN { printf "%-19s  %-31s  %s\n", "UPDATED", "SESSION", "TITLE" }
+  {
+    printf "%-19s  %-31s  %s\n", $1, $2, $3
+  }'
+
+  exit 0
+fi
+
+SQL="
+SELECT
+  datetime(p.time_created / 1000, 'unixepoch', 'localtime') AS ts,
+  s.id,
+  json_extract(m.data, '$.role') AS role,
+  json_extract(p.data, '$.type') AS part_type,
+  s.title,
+  substr(
+    replace(
+      replace(
+        CASE
+          WHEN json_extract(p.data, '$.type') = 'text'
+            THEN coalesce(json_extract(p.data, '$.text'), '')
+          WHEN json_extract(p.data, '$.type') = 'tool'
+            THEN coalesce(json_extract(p.data, '$.state.input.command'), json_extract(p.data, '$.tool'), p.data)
+          ELSE
+            coalesce(json_extract(p.data, '$.text'), p.data)
+        END,
+        char(10),
+        ' '
+      ),
+      char(13),
+      ' '
+    ),
+    1,
+    220
+  ) AS snippet
+FROM part p
+JOIN message m ON m.id = p.message_id
+JOIN session s ON s.id = p.session_id
+WHERE ${WHERE_SQL}
+ORDER BY p.time_created DESC
+LIMIT ${LIMIT};"
+
+if ! output="$(run_sql "$SQL")"; then
+  fallback_grep "$QUERY"
+  exit $?
+fi
+
+if [[ -z "$output" ]]; then
+  echo "No matches for: $QUERY"
+  exit 0
+fi
+
+printf '%s\n' "$output" | awk -F '\t' 'BEGIN {
+  printf "%-19s  %-31s  %-9s %-10s %-34s  %s\n", "TIME", "SESSION", "ROLE", "TYPE", "TITLE", "SNIPPET"
+}
+{
+  title = $5
+  snippet = $6
+  if (length(title) > 34) title = substr(title, 1, 31) "..."
+  if (length(snippet) > 160) snippet = substr(snippet, 1, 157) "..."
+  printf "%-19s  %-31s  %-9s %-10s %-34s  %s\n", $1, $2, $3, $4, title, snippet
+}'
