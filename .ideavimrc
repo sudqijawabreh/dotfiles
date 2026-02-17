@@ -43,6 +43,8 @@ vmap <leader>gi d$i//#start_exclude_commit<esc>p']o<esc>0Di//#end_exclude_commit
 " duplicate line above
 nmap <leader>D :.t-1<cr>
 nmap <leader>d _d$
+nmap <leader>[ O<esc>
+nmap <leader>] o<esc>
 
 
 
