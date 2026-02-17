@@ -1,0 +1,15 @@
+#!/bin/bash
+curl -sS -X POST "http://10.10.4.6/dashboards/customers/activefeature.html?customer=$1" | tr '\n' ' ' \
+| sed -E 's#</tr>#\n#g' \
+| awk '
+  BEGIN { FS="<td>|</td>" }
+  /<tr>/ {
+    name=$2
+    modified=$8
+    if (name != "" && modified != "") {
+      gsub(/^[[:space:]]+|[[:space:]]+$/, "", name)
+      gsub(/^[[:space:]]+|[[:space:]]+$/, "", modified)
+      print name "\t" modified
+    }
+  }
+' | fzf
