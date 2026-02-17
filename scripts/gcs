@@ -1,0 +1,9 @@
+#!/bin/bash
+
+curl -sS -X 'GET' \
+  "http://10.10.20.4/Setting" \
+  -H 'accept: application/json' \
+  -H "X-R365-Customer-instance: ${1}" \
+  -H 'Content-Type: application/json' \
+   | jq 'map({(.settingId): .value}) | add' | cjson
+

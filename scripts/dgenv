@@ -1,0 +1,9 @@
+#!/bin/bash
+
+curl -sS -X 'POST' \
+  'http://10.10.14.67/Setting' \
+  -H 'accept: application/json' \
+  -H "X-R365-Customer-instance: ${1}" \
+  -H 'Content-Type: application/json' \
+  -d '[ 1,2,3,4,5,6 ]' | jq 'map({(.settingId): .value}) | add'
+
