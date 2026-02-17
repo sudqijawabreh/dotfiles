@@ -1,0 +1,179 @@
+#!/usr/bin/env bash
+
+set -Eeuo pipefail
+
+DB_PATH="${OPENCODE_DB_PATH:-$HOME/.local/share/opencode/opencode.db}"
+HISTORY_PICKER="${OPENCODE_HISTORY_PICKER:-$HOME/dotfiles/scripts/opencode-history-search}"
+LIMIT="${OHS_LIMIT:-300}"
+PRINT_SESSION=0
+USE_HISTORY_QUERY=0
+
+usage() {
+  cat <<'USAGE'
+OpenCode History Session picker.
+
+Usage:
+  ohs [options] [query...]
+
+Behavior:
+  - `ohs` (no query): show recent sessions and open selected one.
+  - `ohs <query>`: search sessions by content/title for that query.
+  - `ohs --history-query`: pick query from prompt history, then pick session.
+  - Opens selected session with:
+      opencode <session-directory> --session <selected-session-id>
+
+Options:
+      --print-session   Print selected session id and exit (do not open opencode)
+      --history-query   Pick query from prompt history first
+  -h, --help            Show help
+
+Examples:
+  ohs
+  ohs jira ticket
+  ohs --history-query
+  ohs --print-session "state case sensitivity"
+USAGE
+}
+
+require_cmd() {
+  if ! command -v "$1" >/dev/null 2>&1; then
+    echo "Missing required command: $1" >&2
+    exit 1
+  fi
+}
+
+escape_sql() {
+  local s="$1"
+  s="${s//\'/\'\'}"
+  printf '%s' "$s"
+}
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --print-session)
+      PRINT_SESSION=1
+      shift
+      ;;
+    --history-query)
+      USE_HISTORY_QUERY=1
+      shift
+      ;;
+    -h|--help)
+      usage
+      exit 0
+      ;;
+    --)
+      shift
+      break
+      ;;
+    -*)
+      echo "Unknown option: $1" >&2
+      usage
+      exit 1
+      ;;
+    *)
+      break
+      ;;
+  esac
+done
+
+require_cmd sqlite3
+require_cmd fzf
+require_cmd opencode
+
+if [[ ! -f "$DB_PATH" ]]; then
+  echo "OpenCode DB not found at: $DB_PATH" >&2
+  exit 1
+fi
+
+QUERY=""
+MODE="recent"
+
+if [[ $# -gt 0 ]]; then
+  QUERY="$*"
+  MODE="search"
+elif [[ "$USE_HISTORY_QUERY" -eq 1 ]]; then
+  if [[ ! -x "$HISTORY_PICKER" ]]; then
+    echo "History picker script not found/executable: $HISTORY_PICKER" >&2
+    exit 1
+  fi
+  QUERY="$($HISTORY_PICKER --fzf --pick-only)" || exit $?
+  MODE="search"
+fi
+
+if [[ "$MODE" == "search" ]]; then
+  QUERY_ESCAPED="$(escape_sql "$QUERY")"
+  SQL="
+SELECT
+  datetime(MAX(p.time_created) / 1000, 'unixepoch', 'localtime') AS last_time,
+  s.id,
+  s.title,
+  COUNT(*) AS score,
+  s.directory
+FROM part p
+JOIN session s ON s.id = p.session_id
+WHERE instr(lower(s.title || ' ' || p.data), lower('${QUERY_ESCAPED}')) > 0
+GROUP BY s.id, s.title, s.directory
+ORDER BY MAX(p.time_created) DESC
+LIMIT ${LIMIT};"
+else
+  SQL="
+SELECT
+  datetime(s.time_updated / 1000, 'unixepoch', 'localtime') AS last_time,
+  s.id,
+  s.title,
+  (
+    SELECT COUNT(*)
+    FROM message m
+    WHERE m.session_id = s.id
+  ) AS score,
+  s.directory
+FROM session s
+ORDER BY s.time_updated DESC
+LIMIT ${LIMIT};"
+fi
+
+RESULTS="$(sqlite3 -readonly -noheader -separator $'\t' "$DB_PATH" "$SQL")"
+
+if [[ -z "$RESULTS" ]]; then
+  if [[ "$MODE" == "search" ]]; then
+    echo "No matching sessions found for query: $QUERY" >&2
+  else
+    echo "No sessions found." >&2
+  fi
+  exit 0
+fi
+
+SELECTED="$({
+  printf '%s\n' "$RESULTS" | fzf \
+    --prompt='OpenCode session> ' \
+    --height=75% \
+    --layout=reverse \
+    --border \
+    --delimiter=$'\t' \
+    --with-nth=1,3,4,5 \
+    --header=$'Enter: open session | Ctrl-C: cancel' \
+    --preview 'echo "Session ID: {2}"; echo; echo "Title: {3}"; echo; echo "Score: {4}"; echo; echo "Directory: {5}"; echo; echo "Last activity: {1}"' \
+    --preview-window=down:8:wrap \
+    --query "$QUERY"
+})"
+
+if [[ -z "$SELECTED" ]]; then
+  exit 130
+fi
+
+SESSION_ID="$(printf '%s\n' "$SELECTED" | head -n 1 | cut -f2)"
+SESSION_DIR="$(printf '%s\n' "$SELECTED" | head -n 1 | cut -f5)"
+
+if [[ "$PRINT_SESSION" -eq 1 ]]; then
+  printf '%s\n' "$SESSION_ID"
+  exit 0
+fi
+
+if [[ -n "$SESSION_DIR" && -d "$SESSION_DIR" ]]; then
+  exec opencode "$SESSION_DIR" --session "$SESSION_ID"
+fi
+
+echo "Warning: saved session directory is missing: $SESSION_DIR" >&2
+echo "Opening session from current directory instead." >&2
+exec opencode --session "$SESSION_ID"
