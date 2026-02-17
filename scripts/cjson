@@ -1,0 +1,85 @@
+#!/usr/bin/env bash
+# Interactively pick a JSON field (from stdin) and copy its values to clipboard.
+# Requires: jq, fzf, and either xclip (X11) or wl-copy (Wayland) or pbcopy (mac).
+
+set -Eeuo pipefail
+
+# Read all stdin once (keeps "no file" constraint; fine for typical sizes)
+JSON="$(cat)"
+
+# Choose clipboard command
+clip_cmd() {
+  if command -v xclip >/dev/null 2>&1; then
+    xclip -selection clipboard
+  elif command -v wl-copy >/dev/null 2>&1; then
+    wl-copy
+  elif command -v pbcopy >/dev/null 2>&1; then
+    pbcopy
+  else
+    echo "No clipboard tool found (install xclip or wl-clipboard)" >&2
+    exit 1
+  fi
+}
+
+# Build list of candidate scalar paths:
+# - display: human readable path like user.name or items[].sku
+# - filter: a robust jq filter using bracket notation (handles weird keys), base64-encoded
+#   e.g. .["items"][].["sku"]
+CANDIDATES="$(
+  printf '%s' "$JSON" | jq -r '
+    def to_filter(p):
+      "." + (p | map(if type=="string" then "[" + (tojson) + "]" else "[]" end) | join(""));
+    def to_display(p):
+      (p | map(if type=="string" then . else "[]" end) | join("."));
+    [ paths(scalars) as $p | {display: to_display($p), filter: to_filter($p)} ]
+    | unique_by(.filter)
+    | sort_by(.display)
+    | .[] | "\(.display)\t\(.filter|@base64)"
+  '
+)"
+
+# No scalar fields found?
+if [[ -z "$CANDIDATES" ]]; then
+  echo "No scalar fields found in the input JSON." >&2
+  exit 1
+fi
+
+export JSON  # so preview can access it
+
+# fzf: pick a field, preview shows sample values (dedup+counted)
+# We pass the (base64) filter as an argument to a small bash -c wrapper.
+SELECTED="$(
+  printf '%s\n' "$CANDIDATES" \
+  | fzf --prompt="Field ❯ " --height=80% --layout=reverse --delimiter=$'\t' --with-nth=1 \
+        --preview 'bash -c '"'"'
+          f=$(printf %s "$1" | base64 -d)
+          # Show up to 200 values (one per line), compact, then a freq table:
+          echo "── values (up to 200) ──"
+          printf "%s" "$JSON" | jq -r -c "$f" | sed -n "1,200p"
+          echo
+          echo "── unique counts (top 30) ──"
+          printf "%s" "$JSON" | jq -r -c "$f" | sort | uniq -c | sort -nr | sed -n "1,30p"
+        '"'"' -- {2}'
+)"
+
+# User cancelled
+[[ -z "$SELECTED" ]] && exit 130
+
+# Extract the jq filter (2nd column), decode, then run
+FILTER_B64="${SELECTED#*$'\t'}"
+FILTER="$(printf '%s' "$FILTER_B64" | base64 -d)"
+
+# Pull values, one per line, compact (-c) and raw (-r) for strings
+VALUES="$(printf '%s' "$JSON" | jq -r -c "$FILTER")"
+
+# Copy to clipboard
+if [[ -n "$VALUES" ]]; then
+  printf '%s\n' "$VALUES" | clip_cmd
+  # Nice short summary
+  LINES=$(printf '%s\n' "$VALUES" | wc -l | tr -d ' ')
+  echo "Copied $LINES value(s) from filter: $FILTER"
+else
+  echo "No values produced by filter: $FILTER" >&2
+  exit 2
+fi
+
